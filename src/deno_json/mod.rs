@@ -32,8 +32,14 @@ use crate::glob::PathOrPatternSet;
 use crate::util::is_skippable_io_error;
 use crate::UrlToFilePathError;
 
+mod permission_sets;
 mod ts;
 
+pub use permission_sets::AllowDeny;
+pub use permission_sets::Permission;
+pub use permission_sets::PermissionSets;
+pub use permission_sets::PermissionSetsParseError;
+pub use permission_sets::PermissionsObject;
 pub use ts::CompilerOptions;
 pub use ts::EmitConfigOptions;
 pub use ts::IgnoredCompilerOptions;
@@ -667,6 +673,7 @@ pub struct ConfigFileJson {
   pub exports: Option<Value>,
   #[serde(default)]
   pub unstable: Vec<String>,
+  pub permission_sets: Option<Value>,
 }
 
 pub trait DenoJsonCache {
@@ -1317,6 +1324,19 @@ impl ConfigFile {
     } else {
       Ok(None)
     }
+  }
+
+  pub fn to_permission_sets(&self) -> Result<PermissionSets, AnyError> {
+    Ok(
+      self
+        .json
+        .permission_sets
+        .as_ref()
+        .cloned()
+        .map(permission_sets::to_permission_sets)
+        .transpose()?
+        .unwrap_or_default(),
+    )
   }
 
   pub fn to_compiler_option_types(
