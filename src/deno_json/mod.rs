@@ -35,8 +35,10 @@ use crate::UrlToFilePathError;
 mod permission_sets;
 mod ts;
 
+pub use permission_sets::to_permission_sets;
 pub use permission_sets::AllowDeny;
 pub use permission_sets::Permission;
+pub use permission_sets::PermissionSet;
 pub use permission_sets::PermissionSets;
 pub use permission_sets::PermissionSetsParseError;
 pub use permission_sets::PermissionsObject;

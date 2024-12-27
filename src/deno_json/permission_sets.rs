@@ -6,8 +6,9 @@ use serde::Deserialize;
 pub enum Permission {
   All,
   Some(Vec<String>),
-  #[default]
   None,
+  #[default]
+  NotPresent,
 }
 
 impl<'de> serde::Deserialize<'de> for Permission {
@@ -75,6 +76,25 @@ pub struct AllowDeny {
   pub deny: Permission,
 }
 
+impl Permission {
+  pub fn merge(self, other: Self) -> Self {
+    match (self, other) {
+      (Permission::NotPresent, other) => other,
+      (this, Permission::NotPresent) => this,
+      (_, other) => other,
+    }
+  }
+}
+
+impl AllowDeny {
+  pub fn merge(self, other: Self) -> Self {
+    AllowDeny {
+      allow: self.allow.merge(other.allow),
+      deny: self.deny.merge(other.deny),
+    }
+  }
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum AllowDenyJson {
@@ -111,23 +131,52 @@ fn deserialize_allow_deny<'de, D: serde::Deserializer<'de>>(
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Default)]
 pub struct PermissionsObject {
   #[serde(default)]
-  all: bool,
+  pub all: Option<bool>,
   #[serde(default, deserialize_with = "deserialize_allow_deny")]
-  read: AllowDeny,
+  pub read: AllowDeny,
   #[serde(default, deserialize_with = "deserialize_allow_deny")]
-  write: AllowDeny,
+  pub write: AllowDeny,
   #[serde(default)]
-  import: Permission,
+  pub import: Permission,
   #[serde(default, deserialize_with = "deserialize_allow_deny")]
-  env: AllowDeny,
+  pub env: AllowDeny,
   #[serde(default, deserialize_with = "deserialize_allow_deny")]
-  net: AllowDeny,
+  pub net: AllowDeny,
   #[serde(default, deserialize_with = "deserialize_allow_deny")]
-  run: AllowDeny,
+  pub run: AllowDeny,
   #[serde(default, deserialize_with = "deserialize_allow_deny")]
-  ffi: AllowDeny,
+  pub ffi: AllowDeny,
   #[serde(default, deserialize_with = "deserialize_allow_deny")]
-  sys: AllowDeny,
+  pub sys: AllowDeny,
+  #[serde(default)]
+  pub prompt: Option<bool>,
+}
+
+impl PermissionsObject {
+  pub fn merge(self, other: Self) -> Self {
+    PermissionsObject {
+      all: match (self.all, other.all) {
+        (Some(_), Some(b)) => Some(b),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+      },
+      read: self.read.merge(other.read),
+      write: self.write.merge(other.write),
+      import: self.import.merge(other.import),
+      env: self.env.merge(other.env),
+      net: self.net.merge(other.net),
+      run: self.run.merge(other.run),
+      ffi: self.ffi.merge(other.ffi),
+      sys: self.sys.merge(other.sys),
+      prompt: match (self.prompt, other.prompt) {
+        (Some(_), Some(b)) => Some(b),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+      },
+    }
+  }
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -140,6 +189,28 @@ pub enum PermissionSet {
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct PermissionSets {
   pub sets: IndexMap<String, PermissionSet>,
+}
+
+impl PermissionSets {
+  pub fn merge(self, other: Self) -> Self {
+    let mut sets = self.sets;
+
+    for (key, value) in other.sets {
+      if let Some(existing) = sets.swap_remove(key.as_str()) {
+        match (existing, value) {
+          (PermissionSet::Object(existing), PermissionSet::Object(value)) => {
+            sets.insert(key, PermissionSet::Object(existing.merge(value)));
+          }
+          (_, new) => {
+            sets.insert(key, new);
+          }
+        }
+      } else {
+        sets.insert(key, value);
+      }
+    }
+    Self { sets }
+  }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -161,10 +232,6 @@ fn parse_set(
     _ => Err(PermissionSetsParseError::InvalidType),
   }
 }
-
-// pub struct PermissionSetsJson {
-//   read
-// }
 
 pub fn to_permission_sets(
   value: serde_json::Value,

@@ -34,6 +34,7 @@ use url::Url;
 
 use crate::deno_json;
 use crate::deno_json::get_ts_config_for_emit;
+use crate::deno_json::to_permission_sets;
 use crate::deno_json::BenchConfig;
 use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileRc;
@@ -49,6 +50,7 @@ use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
 use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
+use crate::deno_json::PermissionSets;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
@@ -1355,6 +1357,26 @@ impl WorkspaceDirectory {
 
   pub fn maybe_pkg_json(&self) -> Option<&PackageJsonRc> {
     self.pkg_json.as_ref().map(|c| &c.member)
+  }
+
+  pub fn to_permission_sets(&self) -> Result<PermissionSets, AnyError> {
+    let base = match self
+      .deno_json
+      .as_ref()
+      .and_then(|c| c.root.as_ref()?.json.permission_sets.as_ref())
+    {
+      Some(value) => to_permission_sets(value.clone())?,
+      None => PermissionSets::default(),
+    };
+    let member = match self
+      .deno_json
+      .as_ref()
+      .and_then(|c| c.member.json.permission_sets.as_ref())
+    {
+      Some(value) => to_permission_sets(value.clone())?,
+      None => PermissionSets::default(),
+    };
+    Ok(base.merge(member))
   }
 
   pub fn maybe_package_config(&self) -> Option<JsrPackageConfig> {
