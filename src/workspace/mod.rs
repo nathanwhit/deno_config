@@ -50,6 +50,7 @@ use crate::deno_json::NodeModulesDirParseError;
 use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PermissionSets;
+use crate::deno_json::PermissionSetsParseError;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
@@ -1404,7 +1405,9 @@ impl WorkspaceDirectory {
     self.pkg_json.as_ref().map(|c| &c.member)
   }
 
-  pub fn to_permission_sets(&self) -> Result<PermissionSets, AnyError> {
+  pub fn to_permission_sets(
+    &self,
+  ) -> Result<PermissionSets, PermissionSetsParseError> {
     let base = match self
       .deno_json
       .as_ref()

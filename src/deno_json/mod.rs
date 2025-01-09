@@ -1587,7 +1587,9 @@ impl ConfigFile {
     }
   }
 
-  pub fn to_permission_sets(&self) -> Result<PermissionSets, AnyError> {
+  pub fn to_permission_sets(
+    &self,
+  ) -> Result<PermissionSets, PermissionSetsParseError> {
     Ok(
       self
         .json
