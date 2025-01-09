@@ -1,15 +1,7 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use std::borrow::Cow;
-use std::collections::BTreeMap;
-use std::collections::HashSet;
-use std::collections::VecDeque;
-use std::path::Path;
-use std::path::PathBuf;
-
-use anyhow::bail;
-use anyhow::Context;
-use anyhow::Error as AnyError;
+use deno_error::JsError;
+use deno_error::JsErrorBox;
 use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
@@ -26,6 +18,12 @@ use discovery::ConfigFileDiscovery;
 use discovery::ConfigFolder;
 use discovery::DenoOrPkgJson;
 use indexmap::IndexMap;
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::path::Path;
+use std::path::PathBuf;
 use sys_traits::FsMetadata;
 use sys_traits::FsRead;
 use sys_traits::FsReadDir;
@@ -37,6 +35,7 @@ use crate::deno_json::get_ts_config_for_emit;
 use crate::deno_json::to_permission_sets;
 use crate::deno_json::BenchConfig;
 use crate::deno_json::ConfigFile;
+use crate::deno_json::ConfigFileError;
 use crate::deno_json::ConfigFileRc;
 use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::ConfigParseOptions;
@@ -54,6 +53,8 @@ use crate::deno_json::PermissionSets;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
+use crate::deno_json::ToInvalidConfigError;
+use crate::deno_json::ToLockConfigError;
 use crate::deno_json::TsConfigForEmit;
 use crate::deno_json::TsConfigType;
 use crate::deno_json::WorkspaceConfigParseError;
@@ -125,7 +126,8 @@ pub struct WorkspaceLintConfig {
   pub report: Option<String>,
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, JsError, PartialEq, Eq)]
+#[class(type)]
 pub enum WorkspaceDiagnosticKind {
   #[error(
     "\"{0}\" field can only be specified in the workspace root deno.json file."
@@ -150,37 +152,48 @@ pub enum WorkspaceDiagnosticKind {
   InvalidMemberName { name: String },
 }
 
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, JsError, Clone, PartialEq, Eq)]
+#[class(inherit)]
 #[error("{}\n    at {}", .kind, .config_url)]
 pub struct WorkspaceDiagnostic {
+  #[inherit]
   pub kind: WorkspaceDiagnosticKind,
   pub config_url: Url,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
 pub enum ResolveWorkspacePatchError {
+  #[class(inherit)]
   #[error(transparent)]
   ConfigRead(#[from] ConfigReadError),
+  #[class(type)]
   #[error("Could not find patch member in '{}'.", .dir_url)]
   NotFound { dir_url: Url },
+  #[class(type)]
   #[error("Workspace member cannot be specified as a patch.")]
   WorkspaceMemberNotAllowed,
+  #[class(inherit)]
   #[error(transparent)]
   InvalidPatch(#[from] url::ParseError),
+  #[class(inherit)]
   #[error(transparent)]
   Workspace(Box<WorkspaceDiscoverError>),
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
 pub enum ConfigReadError {
+  #[class(inherit)]
   #[error(transparent)]
   DenoJsonRead(#[from] ConfigFileReadError),
+  #[class(inherit)]
   #[error(transparent)]
   PackageJsonRead(#[from] PackageJsonLoadError),
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
+#[class(type)]
 pub enum ResolveWorkspaceMemberError {
+  #[class(inherit)]
   #[error(transparent)]
   ConfigRead(#[from] ConfigReadError),
   #[error("Could not find config file for workspace member in '{}'.", .dir_url)]
@@ -201,13 +214,16 @@ pub enum ResolveWorkspaceMemberError {
   },
   #[error("Remove the reference to the current config file (\"{}\") in \"workspaces\".", .member)]
   InvalidSelfReference { member: String },
+  #[class(inherit)]
   #[error("Invalid workspace member '{}' for config '{}'.", member, base)]
   InvalidMember {
     base: Url,
     member: String,
     #[source]
+    #[inherit]
     source: url::ParseError,
   },
+  #[class(inherit)]
   #[error(
     "Failed converting {kind} workspace member '{}' to pattern for config '{}'.",
     member,
@@ -219,11 +235,13 @@ pub enum ResolveWorkspaceMemberError {
     member: String,
     // this error has the text that failed
     #[source]
+    #[inherit]
     source: PathOrPatternParseError,
   },
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error, JsError)]
+#[class(inherit)]
 #[error(transparent)]
 pub struct WorkspaceDiscoverError(Box<WorkspaceDiscoverErrorKind>);
 
@@ -246,48 +264,58 @@ where
   }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
+#[class(type)]
+pub enum FailedResolvingStartDirectoryError {
+  #[error("No paths provided.")]
+  NoPathsProvided,
+  #[error("Could not resolve path: '{}'.", .0.display())]
+  CouldNotResolvePath(PathBuf),
+  #[error("Provided config file path ('{}') had no parent directory.", .0.display())]
+  PathHasNoParentDirectory(PathBuf),
+}
+
+#[derive(Debug, Error, JsError)]
 pub enum WorkspaceDiscoverErrorKind {
+  #[class(inherit)]
   #[error("Failed resolving start directory.")]
-  FailedResolvingStartDirectory(#[source] anyhow::Error),
+  FailedResolvingStartDirectory(#[source] FailedResolvingStartDirectoryError),
+  #[class(inherit)]
   #[error(transparent)]
   ConfigRead(#[from] ConfigReadError),
+  #[class(inherit)]
   #[error(transparent)]
   PackageJsonReadError(#[from] PackageJsonLoadError),
+  #[class(inherit)]
   #[error(transparent)]
   PatchConfigParseError(#[from] PatchConfigParseError),
+  #[class(inherit)]
   #[error(transparent)]
   WorkspaceConfigParse(#[from] WorkspaceConfigParseError),
+  #[class(inherit)]
   #[error(transparent)]
   ResolveMember(#[from] ResolveWorkspaceMemberError),
+  #[class(inherit)]
   #[error("Failed loading patch '{}' in config '{}'.", patch, base)]
   ResolvePatch {
     patch: String,
     base: Url,
     #[source]
+    #[inherit]
     source: ResolveWorkspacePatchError,
   },
+  #[class(type)]
   #[error("Command resolved to multiple config files. Ensure all specified paths are within the same workspace.\n  First: {base_workspace_url}\n  Second: {other_workspace_url}")]
   MultipleWorkspaces {
     base_workspace_url: Url,
     other_workspace_url: Url,
   },
+  #[class(inherit)]
   #[error(transparent)]
   UrlToFilePathError(#[from] UrlToFilePathError),
+  #[class(type)]
   #[error("Config file must be a member of the workspace.\n  Config: {config_url}\n  Workspace: {workspace_url}")]
-  ConfigNotWorkspaceMember {
-    workspace_url: UrlRc,
-    config_url: Url,
-  },
-  #[error(
-    "Failed collecting {kind} workspace members.\n  Config: {config_url}"
-  )]
-  FailedCollectingMembers {
-    kind: &'static str,
-    config_url: Url,
-    #[source]
-    source: AnyError,
-  },
+  ConfigNotWorkspaceMember { workspace_url: Url, config_url: Url },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -362,6 +390,11 @@ impl FolderConfigs {
     }
   }
 }
+
+#[derive(Debug, Error, JsError)]
+#[class(type)]
+#[error("lint.report must be a string")]
+pub struct LintConfigError;
 
 #[derive(Debug)]
 pub struct Workspace {
@@ -530,7 +563,7 @@ impl Workspace {
   pub fn create_resolver(
     &self,
     options: CreateResolverOptions,
-    read_text: impl FnOnce(&Path) -> Result<String, AnyError>,
+    read_text: impl FnOnce(&Path) -> Result<String, JsErrorBox>,
   ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
     WorkspaceResolver::from_workspace(self, options, read_text)
   }
@@ -778,14 +811,14 @@ impl Workspace {
 
   pub fn to_compiler_options(
     &self,
-  ) -> Result<Option<ParsedTsConfigOptions>, AnyError> {
+  ) -> Result<Option<ParsedTsConfigOptions>, ConfigFileError> {
     self
       .with_root_config_only(|root_config| root_config.to_compiler_options())
       .map(|o| o.map(Some))
       .unwrap_or(Ok(None))
   }
 
-  pub fn to_lint_config(&self) -> Result<WorkspaceLintConfig, AnyError> {
+  pub fn to_lint_config(&self) -> Result<WorkspaceLintConfig, LintConfigError> {
     self
       .with_root_config_only(|root_config| {
         Ok(WorkspaceLintConfig {
@@ -802,7 +835,7 @@ impl Workspace {
               | serde_json::Value::Number(_)
               | serde_json::Value::Array(_)
               | serde_json::Value::Object(_) => {
-                bail!("lint.report must be a string")
+                return Err(LintConfigError);
               }
             },
             None => None,
@@ -815,20 +848,22 @@ impl Workspace {
   pub fn resolve_ts_config_for_emit(
     &self,
     config_type: TsConfigType,
-  ) -> Result<TsConfigForEmit, AnyError> {
+  ) -> Result<TsConfigForEmit, ConfigFileError> {
     get_ts_config_for_emit(
       config_type,
       self.root_deno_json().map(|c| c.as_ref()),
     )
   }
 
-  pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, AnyError> {
+  pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, ConfigFileError> {
     self
       .with_root_config_only(|root_config| root_config.to_import_map_path())
       .unwrap_or(Ok(None))
   }
 
-  pub fn resolve_lockfile_path(&self) -> Result<Option<PathBuf>, AnyError> {
+  pub fn resolve_lockfile_path(
+    &self,
+  ) -> Result<Option<PathBuf>, ToLockConfigError> {
     if let Some(deno_json) = self.root_deno_json() {
       Ok(deno_json.resolve_lockfile_path()?)
     } else if let Some(pkg_json) = self.root_pkg_json() {
@@ -840,7 +875,7 @@ impl Workspace {
 
   pub fn to_compiler_option_types(
     self: &WorkspaceRc,
-  ) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
+  ) -> Result<Vec<(Url, Vec<String>)>, serde_json::Error> {
     self
       .with_root_config_only(|root_config| {
         root_config.to_compiler_option_types()
@@ -850,7 +885,10 @@ impl Workspace {
 
   pub fn to_maybe_jsx_import_source_config(
     self: &WorkspaceRc,
-  ) -> Result<Option<JsxImportSourceConfig>, AnyError> {
+  ) -> Result<
+    Option<JsxImportSourceConfig>,
+    deno_json::ToMaybeJsxImportSourceConfigError,
+  > {
     self
       .with_root_config_only(|root_config| {
         root_config.to_maybe_jsx_import_source_config()
@@ -861,7 +899,7 @@ impl Workspace {
   pub fn resolve_bench_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceDirectory, BenchConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceDirectory, BenchConfig)>, ToInvalidConfigError> {
     self.resolve_config_for_members(cli_args, |dir, patterns| {
       dir.to_bench_config(patterns)
     })
@@ -870,7 +908,7 @@ impl Workspace {
   pub fn resolve_lint_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceDirectory, LintConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceDirectory, LintConfig)>, ToInvalidConfigError> {
     self.resolve_config_for_members(cli_args, |dir, patterns| {
       dir.to_lint_config(patterns)
     })
@@ -879,7 +917,7 @@ impl Workspace {
   pub fn resolve_fmt_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceDirectory, FmtConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceDirectory, FmtConfig)>, ToInvalidConfigError> {
     self.resolve_config_for_members(cli_args, |dir, patterns| {
       dir.to_fmt_config(patterns)
     })
@@ -888,20 +926,17 @@ impl Workspace {
   pub fn resolve_test_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceDirectory, TestConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceDirectory, TestConfig)>, ToInvalidConfigError> {
     self.resolve_config_for_members(cli_args, |dir, patterns| {
       dir.to_test_config(patterns)
     })
   }
 
-  fn resolve_config_for_members<TConfig>(
+  fn resolve_config_for_members<TConfig, E>(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-    resolve_config: impl Fn(
-      &WorkspaceDirectory,
-      FilePatterns,
-    ) -> Result<TConfig, AnyError>,
-  ) -> Result<Vec<(WorkspaceDirectory, TConfig)>, AnyError> {
+    resolve_config: impl Fn(&WorkspaceDirectory, FilePatterns) -> Result<TConfig, E>,
+  ) -> Result<Vec<(WorkspaceDirectory, TConfig)>, E> {
     let cli_args_by_folder = self.split_cli_args_by_deno_json_folder(cli_args);
     let mut result = Vec::with_capacity(cli_args_by_folder.len());
     for (folder_url, patterns) in cli_args_by_folder {
@@ -1018,7 +1053,9 @@ impl Workspace {
     results
   }
 
-  pub fn resolve_config_excludes(&self) -> Result<PathOrPatternSet, AnyError> {
+  pub fn resolve_config_excludes(
+    &self,
+  ) -> Result<PathOrPatternSet, ToInvalidConfigError> {
     // have the root excludes at the front because they're lower priority
     let mut excludes = match &self.root_deno_json() {
       Some(c) => c.to_exclude_files_config()?.exclude.into_path_or_patterns(),
@@ -1087,6 +1124,16 @@ struct WorkspaceDirConfig<T> {
   root: Option<crate::sync::MaybeArc<T>>,
 }
 
+#[derive(Debug, Error, JsError)]
+#[class(inherit)]
+#[error("Failed parsing '{specifier}'.")]
+pub struct ToTasksConfigError {
+  specifier: Url,
+  #[source]
+  #[inherit]
+  error: ToInvalidConfigError,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceDirectory {
   pub workspace: WorkspaceRc,
@@ -1129,7 +1176,7 @@ impl WorkspaceDirectory {
           if paths.is_empty() {
             Err(
               WorkspaceDiscoverErrorKind::FailedResolvingStartDirectory(
-                anyhow::anyhow!("No paths provided."),
+                FailedResolvingStartDirectoryError::NoPathsProvided,
               )
               .into(),
             )
@@ -1153,9 +1200,8 @@ impl WorkspaceDirectory {
                   Some(parent) => Ok(url_from_directory_path(parent).unwrap()),
                   None => Err(
                     WorkspaceDiscoverErrorKind::FailedResolvingStartDirectory(
-                      anyhow::anyhow!(
-                        "Could not resolve path: '{}'",
-                        path.display()
+                      FailedResolvingStartDirectoryError::CouldNotResolvePath(
+                        path.clone(),
                       ),
                     )
                     .into(),
@@ -1168,9 +1214,8 @@ impl WorkspaceDirectory {
         WorkspaceDiscoverStart::ConfigFile(path) => {
           let parent = path.parent().ok_or_else(|| {
             WorkspaceDiscoverErrorKind::FailedResolvingStartDirectory(
-              anyhow::anyhow!(
-                "Provided config file path ('{}') had no parent directory.",
-                path.display()
+              FailedResolvingStartDirectoryError::PathHasNoParentDirectory(
+                path.to_path_buf(),
               ),
             )
           })?;
@@ -1396,7 +1441,7 @@ impl WorkspaceDirectory {
   pub fn to_lint_config(
     &self,
     cli_args: FilePatterns,
-  ) -> Result<LintConfig, AnyError> {
+  ) -> Result<LintConfig, ToInvalidConfigError> {
     let mut config = self.to_lint_config_inner()?;
     self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     combine_files_config_with_cli_args(&mut config.files, cli_args);
@@ -1404,7 +1449,7 @@ impl WorkspaceDirectory {
     Ok(config)
   }
 
-  fn to_lint_config_inner(&self) -> Result<LintConfig, AnyError> {
+  fn to_lint_config_inner(&self) -> Result<LintConfig, ToInvalidConfigError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(LintConfig {
         options: Default::default(),
@@ -1453,7 +1498,7 @@ impl WorkspaceDirectory {
   pub fn to_fmt_config(
     &self,
     cli_args: FilePatterns,
-  ) -> Result<FmtConfig, AnyError> {
+  ) -> Result<FmtConfig, ToInvalidConfigError> {
     let mut config = self.to_fmt_config_inner()?;
     self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     combine_files_config_with_cli_args(&mut config.files, cli_args);
@@ -1461,7 +1506,7 @@ impl WorkspaceDirectory {
     Ok(config)
   }
 
-  fn to_fmt_config_inner(&self) -> Result<FmtConfig, AnyError> {
+  fn to_fmt_config_inner(&self) -> Result<FmtConfig, ToInvalidConfigError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(FmtConfig {
         files: FilePatterns::new_with_base(
@@ -1510,7 +1555,7 @@ impl WorkspaceDirectory {
   pub fn to_bench_config(
     &self,
     cli_args: FilePatterns,
-  ) -> Result<BenchConfig, AnyError> {
+  ) -> Result<BenchConfig, ToInvalidConfigError> {
     let mut config = self.to_bench_config_inner()?;
     self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     combine_files_config_with_cli_args(&mut config.files, cli_args);
@@ -1518,7 +1563,7 @@ impl WorkspaceDirectory {
     Ok(config)
   }
 
-  fn to_bench_config_inner(&self) -> Result<BenchConfig, AnyError> {
+  fn to_bench_config_inner(&self) -> Result<BenchConfig, ToInvalidConfigError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(BenchConfig {
         files: FilePatterns::new_with_base(
@@ -1536,11 +1581,13 @@ impl WorkspaceDirectory {
     })
   }
 
-  pub fn to_tasks_config(&self) -> Result<WorkspaceTasksConfig, AnyError> {
+  pub fn to_tasks_config(
+    &self,
+  ) -> Result<WorkspaceTasksConfig, ToTasksConfigError> {
     fn to_member_tasks_config(
       maybe_deno_json: Option<&ConfigFileRc>,
       maybe_pkg_json: Option<&PackageJsonRc>,
-    ) -> Result<Option<WorkspaceMemberTasksConfig>, AnyError> {
+    ) -> Result<Option<WorkspaceMemberTasksConfig>, ToTasksConfigError> {
       let config = WorkspaceMemberTasksConfig {
         deno_json: match maybe_deno_json {
           Some(deno_json) => deno_json
@@ -1551,8 +1598,9 @@ impl WorkspaceDirectory {
                 tasks,
               })
             })
-            .with_context(|| {
-              format!("Failed parsing '{}'.", deno_json.specifier)
+            .map_err(|error| ToTasksConfigError {
+              specifier: deno_json.specifier.clone(),
+              error,
             })?,
           None => None,
         },
@@ -1584,14 +1632,18 @@ impl WorkspaceDirectory {
     })
   }
 
-  pub fn to_publish_config(&self) -> Result<PublishConfig, AnyError> {
+  pub fn to_publish_config(
+    &self,
+  ) -> Result<PublishConfig, ToInvalidConfigError> {
     let mut config = self.to_publish_config_inner()?;
     self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
 
-  fn to_publish_config_inner(&self) -> Result<PublishConfig, AnyError> {
+  fn to_publish_config_inner(
+    &self,
+  ) -> Result<PublishConfig, ToInvalidConfigError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(PublishConfig {
         files: FilePatterns::new_with_base(
@@ -1612,7 +1664,7 @@ impl WorkspaceDirectory {
   pub fn to_test_config(
     &self,
     cli_args: FilePatterns,
-  ) -> Result<TestConfig, AnyError> {
+  ) -> Result<TestConfig, ToInvalidConfigError> {
     let mut config = self.to_test_config_inner()?;
     self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     combine_files_config_with_cli_args(&mut config.files, cli_args);
@@ -1620,7 +1672,7 @@ impl WorkspaceDirectory {
     Ok(config)
   }
 
-  fn to_test_config_inner(&self) -> Result<TestConfig, AnyError> {
+  fn to_test_config_inner(&self) -> Result<TestConfig, ToInvalidConfigError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(TestConfig {
         files: FilePatterns::new_with_base(
@@ -3810,7 +3862,7 @@ mod test {
           config_url,
         } => {
           assert_eq!(
-            workspace_url.as_ref(),
+            workspace_url,
             &url_from_directory_path(&root_dir()).unwrap()
           );
           assert_eq!(
@@ -5027,8 +5079,7 @@ mod test {
     sys.fs_insert(root_dir().join("member-a/file.ts"), "");
     sys.fs_insert(root_dir().join("member-a/sub-dir/file.ts"), "");
     let files = FileCollector::new(|_| true)
-      .collect_file_patterns(&sys, file_patterns.remove(1))
-      .unwrap();
+      .collect_file_patterns(&sys, file_patterns.remove(1));
     assert!(files.is_empty());
   }
 
@@ -5090,8 +5141,7 @@ mod test {
     sys.fs_insert(root_dir().join("member-a/file.ts"), "");
     sys.fs_insert(root_dir().join("member-a/sub-dir/file.ts"), "");
     let files = FileCollector::new(|_| true)
-      .collect_file_patterns(&sys, file_patterns.remove(1))
-      .unwrap();
+      .collect_file_patterns(&sys, file_patterns.remove(1));
     // should only have member-a/sub-dir/file.ts and not member-a/file.ts
     assert_eq!(files, vec![root_dir().join("member-a/sub-dir/file.ts")]);
   }
